@@ -1,0 +1,26 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: midtrans-backend
+    env_file:
+      - .env
+    ports:
+      - "8111:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://192.168.20.81:8111
+    container_name: midtrans-frontend
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://192.168.20.81:8111
+    ports:
+      - "3111:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
