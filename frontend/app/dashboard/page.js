@@ -3,19 +3,44 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
+import UserShell from "../../components/user-shell";
+import { formatCurrency } from "../../lib/api";
+import { getUserToken, loadUserWorkspace } from "../../lib/user-workspace";
 
-async function authFetch(path, token) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
-  const payload = await response.json();
-  if (!response.ok) {
-    throw new Error(payload.detail || "Request gagal.");
-  }
-  return payload;
+function StatusChart({ points }) {
+  const max = Math.max(...points.map((item) => item.value), 1);
+  return (
+    <div className="chart-bars">
+      {points.map((item) => (
+        <div className="chart-bar-row" key={item.label}>
+          <div className="chart-bar-meta">
+            <strong style={{ textTransform: "capitalize" }}>{item.label}</strong>
+            <span className="muted">{item.value}</span>
+          </div>
+          <div className="chart-bar-track">
+            <div className="chart-bar-fill" style={{ width: `${(item.value / max) * 100}%` }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RevenueTrend({ points }) {
+  const max = Math.max(...points.map((item) => item.value), 1);
+  return (
+    <div className="trend-chart">
+      {points.map((item) => (
+        <div className="trend-column" key={item.label}>
+          <div className="trend-bar-wrap">
+            <div className="trend-bar" style={{ height: `${Math.max((item.value / max) * 100, item.value > 0 ? 8 : 0)}%` }} />
+          </div>
+          <strong>{formatCurrency(item.value)}</strong>
+          <div className="trend-label">{item.label}</div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function DashboardPage() {
@@ -23,319 +48,139 @@ export default function DashboardPage() {
   const [profile, setProfile] = useState(null);
   const [summary, setSummary] = useState(null);
   const [transactions, setTransactions] = useState([]);
-  const [paymentForm, setPaymentForm] = useState({
-    order_id: "",
-    gross_amount: "",
-    payment_type: "bank_transfer",
-    email: "",
-    first_name: "",
-    phone: "",
-    bank: "bca",
-  });
-  const [apiKey, setApiKey] = useState("");
-  const [newApiKey, setNewApiKey] = useState("");
-  const [chargeResult, setChargeResult] = useState(null);
   const [error, setError] = useState("");
 
-  async function loadDashboard(token) {
-    const [profileData, summaryData, transactionData] = await Promise.all([
-      authFetch("/api/auth/me", token),
-      authFetch("/api/user/dashboard/summary", token),
-      authFetch("/api/user/transactions", token),
-    ]);
-    setProfile(profileData);
-    setSummary(summaryData);
-    setTransactions(transactionData);
-    setPaymentForm((current) => ({
-      ...current,
-      email: current.email || profileData.email || "",
-      first_name: current.first_name || profileData.full_name || "",
-    }));
-  }
-
   useEffect(() => {
-    const token = localStorage.getItem("userToken");
+    const token = getUserToken();
     if (!token) {
       router.push("/login");
       return;
     }
 
-    loadDashboard(token).catch((err) => {
-      setError(err.message);
-    });
+    loadUserWorkspace(token)
+      .then(({ profile: profileData, summary: summaryData, transactions: transactionData }) => {
+        setProfile(profileData);
+        setSummary(summaryData);
+        setTransactions(transactionData);
+      })
+      .catch((err) => {
+        setError(err.message);
+      });
   }, [router]);
 
-  function logout() {
-    localStorage.removeItem("userToken");
-    router.push("/login");
-  }
-
-  async function rotateApiKey() {
-    const token = localStorage.getItem("userToken");
-    if (!token) {
-      router.push("/login");
-      return;
-    }
-
-    try {
-      setError("");
-      const response = await fetch(`${API_BASE_URL}/api/auth/api-keys/rotate`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.detail || "Rotate API key gagal.");
-      }
-      setNewApiKey(payload.api_key);
-      setApiKey(payload.api_key);
-      await loadDashboard(token);
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
-  async function submitCharge(event) {
-    event.preventDefault();
-    setError("");
-    setChargeResult(null);
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/payments/charge`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": apiKey,
-        },
-        body: JSON.stringify({
-          payment_type: paymentForm.payment_type,
-          transaction_details: {
-            order_id: paymentForm.order_id,
-            gross_amount: Number(paymentForm.gross_amount),
-          },
-          customer_details: {
-            first_name: paymentForm.first_name,
-            email: paymentForm.email,
-            phone: paymentForm.phone,
-          },
-          bank_transfer:
-            paymentForm.payment_type === "bank_transfer"
-              ? {
-                  bank: paymentForm.bank,
-                }
-              : undefined,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.detail || "Charge gagal.");
-      }
-      setChargeResult(payload);
-      const token = localStorage.getItem("userToken");
-      if (token) {
-        await loadDashboard(token);
-      }
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
   return (
-    <main className="shell stack">
-      <div className="nav">
-        <div>
-          <div className="badge">User Dashboard</div>
-          <h1 style={{ marginBottom: 0 }}>Transaksi pribadi</h1>
-        </div>
-        <div className="nav-links">
-          <button className="button ghost" onClick={logout}>
-            Logout
-          </button>
-        </div>
-      </div>
-
-      {error ? <p className="danger">{error}</p> : null}
-
+    <UserShell title="Dashboard" description="Ringkasan singkat workspace user. Operasional kasir dipindah ke Manual Transaction, sedangkan secret dan pengaturan dipisah di menu lain.">
+      {error ? <div className="notice error">{error}</div> : null}
       {profile && summary ? (
         <>
-          <section className="grid">
-            <article className="card">
-              <div className="muted">Nama</div>
+          <section className="grid four">
+            <article className="card stat-card">
+              <div className="muted">Kasir</div>
               <div className="metric" style={{ fontSize: "1.5rem" }}>{profile.full_name}</div>
             </article>
-            <article className="card">
-              <div className="muted">Total transaksi</div>
+            <article className="card stat-card">
+              <div className="muted">Transaksi</div>
               <div className="metric">{summary.total_transactions}</div>
             </article>
-            <article className="card">
-              <div className="muted">Pending</div>
+            <article className="card stat-card">
+              <div className="muted">Menunggu bayar</div>
               <div className="metric">{summary.pending_transactions}</div>
             </article>
-            <article className="card">
-              <div className="muted">Settled</div>
+            <article className="card stat-card">
+              <div className="muted">Berhasil</div>
               <div className="metric">{summary.settled_transactions}</div>
             </article>
           </section>
 
-          <section className="panel stack">
-            <div>
-              <h2>Informasi akun</h2>
-              <p>{profile.email}</p>
-              <p>API key prefix aktif: {profile.api_key_prefixes.join(", ") || "-"}</p>
-            </div>
-            <label>
-              API key untuk request payment
-              <input
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-                placeholder="Paste API key lengkap di sini"
-              />
-            </label>
-            <div className="nav-links">
-              <button className="button secondary" onClick={rotateApiKey}>
-                Rotate API Key
-              </button>
-              {newApiKey ? (
-                <button className="button ghost" onClick={() => navigator.clipboard.writeText(newApiKey)}>
-                  Copy API Key Baru
-                </button>
-              ) : null}
-            </div>
-            {newApiKey ? (
-              <div className="card stack">
-                <div className="muted">API key baru</div>
-                <code style={{ wordBreak: "break-all" }}>{newApiKey}</code>
+          <section className="grid four">
+            <article className="card stat-card">
+              <div className="muted">Total revenue</div>
+              <div className="metric">{formatCurrency(summary.total_amount)}</div>
+            </article>
+            <article className="card stat-card">
+              <div className="muted">Settled revenue</div>
+              <div className="metric">{formatCurrency(summary.settled_amount)}</div>
+            </article>
+            <article className="card stat-card">
+              <div className="muted">Admin fee 0.5%</div>
+              <div className="metric">{formatCurrency(summary.admin_fee_revenue)}</div>
+            </article>
+            <article className="card stat-card">
+              <div className="muted">Pendapatan bersih</div>
+              <div className="metric">{formatCurrency(summary.net_revenue)}</div>
+            </article>
+          </section>
+
+          <section className="grid two">
+            <article className="panel stack">
+              <span className="eyebrow">Quick Overview</span>
+              <h2>Ringkasan akun</h2>
+              <div className="cashier-inline">
+                <div className="muted">Email</div>
+                <strong>{profile.email}</strong>
               </div>
-            ) : null}
+              <div className="cashier-inline">
+                <div className="muted">API key prefix</div>
+                <strong>{profile.api_key_prefixes.join(", ") || "-"}</strong>
+              </div>
+            </article>
+
+            <article className="panel stack">
+              <span className="eyebrow">Cashier Flow</span>
+              <h2>Area kerja dipisah</h2>
+              <p className="muted">Masuk ke `Manual Transaction` untuk QRIS checkout, ke `Secret` untuk API key, dan ke `Settings` untuk pengaturan workspace.</p>
+            </article>
+          </section>
+
+          <section className="chart-grid">
+            <article className="panel chart-card">
+              <div>
+                <span className="eyebrow">Status Chart</span>
+                <h2 style={{ marginBottom: 4 }}>Breakdown transaksi</h2>
+                <p className="muted">Distribusi status transaksi di workspace ini.</p>
+              </div>
+              <StatusChart points={summary.status_breakdown} />
+            </article>
+
+            <article className="panel chart-card">
+              <div>
+                <span className="eyebrow">Revenue Trend</span>
+                <h2 style={{ marginBottom: 4 }}>Pendapatan 7 hari</h2>
+                <p className="muted">Hanya menghitung transaksi sukses untuk revenue harian.</p>
+              </div>
+              <RevenueTrend points={summary.daily_revenue} />
+            </article>
           </section>
 
           <section className="panel stack">
-            <div>
-              <h2>Buat payment</h2>
-              <p>Charge Midtrans dipanggil lewat backend dan wajib memakai `X-API-Key` user.</p>
-            </div>
-            <form className="grid" onSubmit={submitCharge}>
-              <label>
-                Order ID
-                <input
-                  value={paymentForm.order_id}
-                  onChange={(event) => setPaymentForm({ ...paymentForm, order_id: event.target.value })}
-                  required
-                />
-              </label>
-              <label>
-                Gross Amount
-                <input
-                  type="number"
-                  value={paymentForm.gross_amount}
-                  onChange={(event) => setPaymentForm({ ...paymentForm, gross_amount: event.target.value })}
-                  required
-                />
-              </label>
-              <label>
-                Payment Type
-                <input
-                  value={paymentForm.payment_type}
-                  onChange={(event) => setPaymentForm({ ...paymentForm, payment_type: event.target.value })}
-                  required
-                />
-              </label>
-              <label>
-                Bank
-                <input
-                  value={paymentForm.bank}
-                  onChange={(event) => setPaymentForm({ ...paymentForm, bank: event.target.value })}
-                />
-              </label>
-              <label>
-                Nama customer
-                <input
-                  value={paymentForm.first_name}
-                  onChange={(event) => setPaymentForm({ ...paymentForm, first_name: event.target.value })}
-                />
-              </label>
-              <label>
-                Email customer
-                <input
-                  type="email"
-                  value={paymentForm.email}
-                  onChange={(event) => setPaymentForm({ ...paymentForm, email: event.target.value })}
-                />
-              </label>
-              <label>
-                Phone
-                <input
-                  value={paymentForm.phone}
-                  onChange={(event) => setPaymentForm({ ...paymentForm, phone: event.target.value })}
-                />
-              </label>
-              <div style={{ alignSelf: "end" }}>
-                <button type="submit">Create Charge</button>
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">History</span>
+                <h2 style={{ margin: 0 }}>Transaksi terbaru</h2>
               </div>
-            </form>
-            {chargeResult ? (
-              <div className="card stack">
-                <h3 style={{ marginBottom: 0 }}>Hasil charge</h3>
-                <p>Status: {chargeResult.transaction_status || chargeResult.status_message || "-"}</p>
-                <p>Order ID: {chargeResult.order_id || "-"}</p>
-                <p>Payment: {chargeResult.payment_type || "-"}</p>
-                {chargeResult.va_numbers?.length ? (
-                  <div>
-                    <div className="muted">VA Numbers</div>
-                    {chargeResult.va_numbers.map((item, index) => (
-                      <p key={`${item.bank}-${index}`}>{item.bank}: {item.va_number}</p>
-                    ))}
-                  </div>
-                ) : null}
-                {chargeResult.actions?.length ? (
-                  <div>
-                    <div className="muted">Actions</div>
-                    {chargeResult.actions.map((item, index) => (
-                      <p key={`${item.name}-${index}`}>{item.name}: {item.url}</p>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </section>
-
-          <section className="panel">
-            <div className="nav">
-              <h2 style={{ margin: 0 }}>Daftar transaksi</h2>
-              <button
-                className="button ghost"
-                onClick={async () => {
-                  const token = localStorage.getItem("userToken");
-                  if (token) {
-                    await loadDashboard(token);
-                  }
-                }}
-              >
-                Refresh
-              </button>
             </div>
-            <table>
-              <thead>
-                <tr>
-                  <th>Order ID</th>
-                  <th>Status</th>
-                  <th>Payment</th>
-                  <th>Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {transactions.map((item) => (
-                  <tr key={item.id || item.order_id}>
-                    <td>{item.order_id}</td>
-                    <td>{item.transaction_status || "-"}</td>
-                    <td>{item.payment_type || "-"}</td>
-                    <td>{item.gross_amount}</td>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Order ID</th>
+                    <th>Status</th>
+                    <th>Amount</th>
+                    <th>Payment</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {transactions.map((item) => (
+                    <tr key={item.id || item.order_id}>
+                      <td>{item.order_id}</td>
+                      <td><span className="chip">{item.transaction_status || "-"}</span></td>
+                      <td>{formatCurrency(item.gross_amount)}</td>
+                      <td>{item.payment_type || "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </section>
         </>
       ) : (
@@ -343,6 +188,6 @@ export default function DashboardPage() {
           <p>Memuat data dashboard...</p>
         </section>
       )}
-    </main>
+    </UserShell>
   );
 }

@@ -1,8 +1,9 @@
+from collections import Counter
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, get_settings
@@ -21,6 +22,7 @@ from app.schemas import (
     HealthResponse,
     LoginRequest,
     MidtransResponse,
+    MidtransRuntimeResponse,
     NotificationPayload,
     NotificationResponse,
     RegisterRequest,
@@ -227,35 +229,86 @@ def to_midtrans_response(payload: dict[str, Any]) -> MidtransResponse:
         va_numbers=payload.get("va_numbers"),
         actions=payload.get("actions"),
         fraud_status=payload.get("fraud_status"),
+        environment=payload.get("environment"),
         raw_response=payload,
     )
 
 
 def summarize_transactions(rows: list[dict[str, Any]]) -> DashboardSummary:
     total_amount = 0.0
+    settled_amount = 0.0
     pending = 0
     settled = 0
+    status_counter: Counter[str] = Counter()
+    daily_totals: dict[str, float] = {}
+    settled_statuses = {"settlement", "capture", "paid"}
+    today = datetime.now(timezone.utc).date()
+    date_buckets = [(today - timedelta(days=index)).isoformat() for index in range(6, -1, -1)]
+    for bucket in date_buckets:
+        daily_totals[bucket] = 0.0
+
     for row in rows:
         try:
-            total_amount += float(row.get("gross_amount") or 0)
+            amount = float(row.get("gross_amount") or 0)
+            total_amount += amount
         except (TypeError, ValueError):
-            pass
+            amount = 0.0
         status_value = (row.get("transaction_status") or "").lower()
+        status_counter[status_value or "unknown"] += 1
         if status_value in {"pending", "authorize"}:
             pending += 1
-        if status_value in {"settlement", "capture", "paid"}:
+        if status_value in settled_statuses:
             settled += 1
+            settled_amount += amount
+            created_at = row.get("created_at")
+            if created_at:
+                try:
+                    bucket = datetime.fromisoformat(created_at.replace("Z", "+00:00")).date().isoformat()
+                except ValueError:
+                    bucket = None
+                if bucket in daily_totals:
+                    daily_totals[bucket] += amount
+
+    admin_fee_rate = 0.005
+    admin_fee_revenue = settled_amount * admin_fee_rate
+    net_revenue = settled_amount + admin_fee_revenue
     return DashboardSummary(
         total_transactions=len(rows),
         pending_transactions=pending,
         settled_transactions=settled,
         total_amount=total_amount,
+        settled_amount=settled_amount,
+        admin_fee_rate=admin_fee_rate,
+        admin_fee_revenue=admin_fee_revenue,
+        net_revenue=net_revenue,
+        status_breakdown=[
+            {"label": label.replace("_", " ") or "unknown", "value": float(value)}
+            for label, value in status_counter.most_common()
+        ],
+        daily_revenue=[
+            {"label": bucket[5:], "value": round(daily_totals[bucket], 2)}
+            for bucket in date_buckets
+        ],
     )
 
 
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
-    return HealthResponse(service=settings.app_name, version=settings.app_version)
+    return HealthResponse(
+        service=settings.app_name,
+        version=settings.app_version,
+        midtrans_mode=settings.default_midtrans_mode(),
+    )
+
+
+@app.get("/api/runtime/midtrans", response_model=MidtransRuntimeResponse, tags=["Runtime"])
+async def midtrans_runtime(settings: Settings = Depends(get_settings)) -> MidtransRuntimeResponse:
+    _, _, current_base_url = settings.midtrans_credentials(settings.default_midtrans_mode())
+    return MidtransRuntimeResponse(
+        default_mode=settings.default_midtrans_mode(),
+        available_modes=settings.available_midtrans_modes(),
+        current_base_url=current_base_url,
+    )
 
 
 @app.post("/api/auth/register", response_model=ApiKeyResponse, tags=["Auth"])
@@ -364,12 +417,15 @@ async def rotate_api_key(
 @app.post("/api/payments/charge", response_model=MidtransResponse, tags=["Payments"])
 async def create_charge(
     request: ChargeRequest,
+    x_midtrans_mode: str | None = Header(default=None),
     user: dict[str, Any] = Depends(require_api_key_user),
     supabase: SupabaseClient = Depends(get_supabase),
     midtrans: MidtransClient = Depends(get_midtrans),
 ) -> MidtransResponse:
     payload = request.model_dump(exclude_none=True)
-    response = await midtrans.charge(payload)
+    mode = midtrans.resolve_mode(x_midtrans_mode)
+    response = await midtrans.charge(payload, mode=mode)
+    response["environment"] = mode
     transaction = {
         "user_id": user["id"],
         "order_id": payload["transaction_details"]["order_id"],
@@ -388,11 +444,14 @@ async def create_charge(
 @app.get("/api/payments/{order_id}/status", response_model=MidtransResponse, tags=["Payments"])
 async def get_payment_status(
     order_id: str,
+    x_midtrans_mode: str | None = Header(default=None),
     user: dict[str, Any] = Depends(require_api_key_user),
     supabase: SupabaseClient = Depends(get_supabase),
     midtrans: MidtransClient = Depends(get_midtrans),
 ) -> MidtransResponse:
-    response = await midtrans.get_status(order_id)
+    mode = midtrans.resolve_mode(x_midtrans_mode)
+    response = await midtrans.get_status(order_id, mode=mode)
+    response["environment"] = mode
     await supabase.update(
         "transactions",
         {
@@ -410,11 +469,14 @@ async def get_payment_status(
 @app.post("/api/payments/{order_id}/cancel", response_model=MidtransResponse, tags=["Payments"])
 async def cancel_payment(
     order_id: str,
+    x_midtrans_mode: str | None = Header(default=None),
     user: dict[str, Any] = Depends(require_api_key_user),
     supabase: SupabaseClient = Depends(get_supabase),
     midtrans: MidtransClient = Depends(get_midtrans),
 ) -> MidtransResponse:
-    response = await midtrans.cancel(order_id)
+    mode = midtrans.resolve_mode(x_midtrans_mode)
+    response = await midtrans.cancel(order_id, mode=mode)
+    response["environment"] = mode
     await supabase.update(
         "transactions",
         {
@@ -652,6 +714,7 @@ async def admin_dashboard(
 @app.post("/api/payments/notifications", response_model=NotificationResponse, tags=["Payments"])
 async def handle_notification(
     payload: NotificationPayload,
+    midtrans_mode: str | None = Query(default=None),
     midtrans: MidtransClient = Depends(get_midtrans),
     supabase: SupabaseClient = Depends(get_supabase),
 ) -> NotificationResponse:
@@ -660,6 +723,7 @@ async def handle_notification(
         status_code=payload.status_code,
         gross_amount=payload.gross_amount,
         signature_key=payload.signature_key,
+        mode=midtrans_mode,
     )
     if not is_valid:
         raise HTTPException(

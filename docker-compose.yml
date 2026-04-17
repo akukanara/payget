@@ -4,8 +4,15 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     container_name: midtrans-backend
+    working_dir: /app
     env_file:
       - .env
+    environment:
+      API_SERVICE_NAME: backend
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      API_RELOAD: "false"
+      API_PUBLIC_BASE_URL: http://192.168.20.81:8111
     ports:
       - "8111:8000"
     restart: unless-stopped
@@ -17,8 +24,16 @@ services:
       args:
         NEXT_PUBLIC_API_BASE_URL: http://192.168.20.81:8111
     container_name: midtrans-frontend
+    working_dir: /app
+    env_file:
+      - .env
     environment:
+      DASHBOARD_SERVICE_NAME: frontend
+      DASHBOARD_HOST: 0.0.0.0
+      DASHBOARD_PORT: 3000
+      DASHBOARD_PUBLIC_URL: http://192.168.20.81:3111
       NEXT_PUBLIC_API_BASE_URL: http://192.168.20.81:8111
+      NEXT_PUBLIC_DASHBOARD_PORT: 3000
     ports:
       - "3111:3000"
     depends_on:

@@ -1,9 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
+import { API_BASE_URL } from "../../../lib/api";
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -33,31 +34,47 @@ export default function AdminLoginPage() {
 
   return (
     <main className="shell stack">
-      <section className="panel stack" style={{ maxWidth: 520 }}>
-        <div className="badge">Admin Login</div>
-        <h1>Masuk ke admin dashboard</h1>
-        <form className="stack" onSubmit={handleSubmit}>
-          <label>
-            Email
-            <input
-              type="email"
-              value={form.email}
-              onChange={(event) => setForm({ ...form, email: event.target.value })}
-              required
-            />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              value={form.password}
-              onChange={(event) => setForm({ ...form, password: event.target.value })}
-              required
-            />
-          </label>
-          {error ? <p className="danger">{error}</p> : null}
-          <button type="submit">Login Admin</button>
-        </form>
+      <section className="auth-layout">
+        <div className="auth-copy">
+          <span className="eyebrow">Admin Access</span>
+          <h1>Masuk ke control room operasional.</h1>
+          <p>
+            Halaman admin dipakai untuk approval user, monitoring transaksi, dan audit aktivitas terbaru
+            tanpa bercampur dengan flow payment user.
+          </p>
+          <div className="nav-links">
+            <Link className="button ghost" href="/">
+              Home
+            </Link>
+          </div>
+        </div>
+
+        <section className="panel stack auth-card">
+          <div className="badge">Admin Login</div>
+          <h2>Admin sign in</h2>
+          <form className="stack" onSubmit={handleSubmit}>
+            <label className="field">
+              <span>Email</span>
+              <input
+                type="email"
+                value={form.email}
+                onChange={(event) => setForm({ ...form, email: event.target.value })}
+                required
+              />
+            </label>
+            <label className="field">
+              <span>Password</span>
+              <input
+                type="password"
+                value={form.password}
+                onChange={(event) => setForm({ ...form, password: event.target.value })}
+                required
+              />
+            </label>
+            {error ? <p className="danger">{error}</p> : null}
+            <button type="submit">Login Admin</button>
+          </form>
+        </section>
       </section>
     </main>
   );

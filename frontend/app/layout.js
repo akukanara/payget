@@ -1,8 +1,8 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Payment Dashboard",
-  description: "Dashboard user dan admin untuk Midtrans Payment API",
+  title: "Kanara Payments",
+  description: "Modern dashboard dan playground untuk Midtrans Payment API",
 };
 
 export default function RootLayout({ children }) {

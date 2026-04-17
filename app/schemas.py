@@ -7,6 +7,7 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     service: str
     version: str
+    midtrans_mode: str | None = None
 
 
 class RegisterRequest(BaseModel):
@@ -131,7 +132,14 @@ class MidtransResponse(BaseModel):
     va_numbers: list[dict[str, Any]] | None = None
     actions: list[dict[str, Any]] | None = None
     fraud_status: str | None = None
+    environment: str | None = None
     raw_response: dict[str, Any]
+
+
+class MidtransRuntimeResponse(BaseModel):
+    default_mode: str
+    available_modes: list[str]
+    current_base_url: str
 
 
 class TransactionRecord(BaseModel):
@@ -173,11 +181,22 @@ class NotificationResponse(BaseModel):
     raw_payload: dict[str, Any]
 
 
+class ChartPoint(BaseModel):
+    label: str
+    value: float
+
+
 class DashboardSummary(BaseModel):
     total_transactions: int
     pending_transactions: int
     settled_transactions: int
     total_amount: float
+    settled_amount: float
+    admin_fee_rate: float
+    admin_fee_revenue: float
+    net_revenue: float
+    status_breakdown: list[ChartPoint]
+    daily_revenue: list[ChartPoint]
 
 
 class AdminDashboardResponse(BaseModel):

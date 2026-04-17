@@ -11,26 +11,40 @@ from app.config import Settings
 class MidtransClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        token = base64.b64encode(f"{settings.midtrans_server_key}:".encode("utf-8")).decode("utf-8")
-        self.headers = {
+    
+    def resolve_mode(self, requested_mode: str | None = None) -> str:
+        mode = (requested_mode or self.settings.default_midtrans_mode()).strip().lower()
+        if mode not in {"sandbox", "production"}:
+            return self.settings.default_midtrans_mode()
+        return mode
+
+    def ensure_configured(self, requested_mode: str | None = None) -> tuple[str, dict[str, str]]:
+        mode = self.resolve_mode(requested_mode)
+        server_key, client_key, base_url = self.settings.midtrans_credentials(mode)
+        if not server_key or not client_key:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Konfigurasi Midtrans untuk mode {mode} belum lengkap.",
+            )
+        token = base64.b64encode(f"{server_key}:".encode("utf-8")).decode("utf-8")
+        return base_url, {
             "Accept": "application/json",
             "Authorization": f"Basic {token}",
             "Content-Type": "application/json",
         }
 
-    def ensure_configured(self) -> None:
-        if not self.settings.midtrans_server_key or not self.settings.midtrans_client_key:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="MIDTRANS_SERVER_KEY dan MIDTRANS_CLIENT_KEY belum dikonfigurasi.",
-            )
-
-    async def _request(self, method: str, path: str, json: dict[str, Any] | None = None) -> dict[str, Any]:
-        self.ensure_configured()
-        url = f"{self.settings.midtrans_base_url}{path}"
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        json: dict[str, Any] | None = None,
+        mode: str | None = None,
+    ) -> dict[str, Any]:
+        base_url, headers = self.ensure_configured(mode)
+        url = f"{base_url}{path}"
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
-                response = await client.request(method=method, url=url, headers=self.headers, json=json)
+                response = await client.request(method=method, url=url, headers=headers, json=json)
             except httpx.RequestError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
@@ -51,14 +65,14 @@ class MidtransClient:
         detail = payload.get("status_message") or payload.get("error_messages") or "Midtrans error"
         raise HTTPException(status_code=response.status_code, detail=detail)
 
-    async def charge(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return await self._request("POST", "/charge", json=payload)
+    async def charge(self, payload: dict[str, Any], mode: str | None = None) -> dict[str, Any]:
+        return await self._request("POST", "/charge", json=payload, mode=mode)
 
-    async def get_status(self, order_id: str) -> dict[str, Any]:
-        return await self._request("GET", f"/{order_id}/status")
+    async def get_status(self, order_id: str, mode: str | None = None) -> dict[str, Any]:
+        return await self._request("GET", f"/{order_id}/status", mode=mode)
 
-    async def cancel(self, order_id: str) -> dict[str, Any]:
-        return await self._request("POST", f"/{order_id}/cancel")
+    async def cancel(self, order_id: str, mode: str | None = None) -> dict[str, Any]:
+        return await self._request("POST", f"/{order_id}/cancel", mode=mode)
 
     def verify_notification_signature(
         self,
@@ -66,8 +80,12 @@ class MidtransClient:
         status_code: str,
         gross_amount: str,
         signature_key: str,
+        mode: str | None = None,
     ) -> bool:
-        self.ensure_configured()
-        raw = f"{order_id}{status_code}{gross_amount}{self.settings.midtrans_server_key}"
+        resolved_mode = self.resolve_mode(mode)
+        server_key, _, _ = self.settings.midtrans_credentials(resolved_mode)
+        if not server_key:
+            return False
+        raw = f"{order_id}{status_code}{gross_amount}{server_key}"
         expected = hashlib.sha512(raw.encode("utf-8")).hexdigest()
         return expected == signature_key
